@@ -1,0 +1,23 @@
+zmq_depth_camera_node:
+  ros__parameters:
+    zmq_url: "tcp://10.11.11.1:20000"
+    poll_rate_hz: 60.0
+    camera_frame_id: "camera_link"
+    depth_frame_id: "camera_depth_optical_frame"
+    left_frame_id: "camera_left_optical_frame"
+    right_frame_id: "camera_right_optical_frame"
+    publish_tf: true
+    publish_base_tf: false
+    parent_frame_id: "base_link"
+    camera_pos_x: 0.15
+    camera_pos_y: 0.0
+    camera_pos_z: 0.06
+    camera_yaw: 0.0
+    camera_pitch: 0.1745
+    camera_roll: 0.0
+    enable_pointcloud: true
+    pointcloud_decimation: 2
+    pointcloud_min_depth: 0.15
+    pointcloud_max_depth: 3.5
+    depth_scale: 0.001
+    max_depth_threshold: 10000

@@ -1,43 +1,49 @@
 #!/usr/bin/env bash
-# Camera ROS2 Startup Script
+# ==============================================================================
+# ZMQ Stereo Depth Camera ROS 2 Driver Startup Script
+# ==============================================================================
 
-# Prevent cross-network DDS conflicts with other robots on the local network
-export ROS_LOCALHOST_ONLY=1
+# Restrict discovery to localhost only if explicitly requested (--localhost)
+if [[ "$*" == *"--localhost"* ]]; then
+    export ROS_LOCALHOST_ONLY=1
+    export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+    DISCOVERY_MODE="Localhost Only"
+else
+    DISCOVERY_MODE="Network / Subnet"
+fi
 
-# Source ROS2 and workspace
-source /opt/ros/humble/setup.bash
-if [ -f /home/ganga/depth_ws/install/setup.bash ]; then
-    source /home/ganga/depth_ws/install/setup.bash
+# 1. Source ROS 2 base installation
+if [ -f /opt/ros/jazzy/setup.bash ]; then
+    source /opt/ros/jazzy/setup.bash
+elif [ -f /opt/ros/humble/setup.bash ]; then
+    source /opt/ros/humble/setup.bash
+elif [ -f /opt/ros/rolling/setup.bash ]; then
+    source /opt/ros/rolling/setup.bash
+fi
+
+# 2. Source workspace overlay
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/install/setup.bash" ]; then
+    source "$SCRIPT_DIR/install/setup.bash"
+elif [ -f "$SCRIPT_DIR/../install/setup.bash" ]; then
+    source "$SCRIPT_DIR/../install/setup.bash"
+elif [ -f "/media/juza/8AE62852E62840B5/rover_slam_ws/install/setup.bash" ]; then
+    source "/media/juza/8AE62852E62840B5/rover_slam_ws/install/setup.bash"
 fi
 
 echo "============================================="
-echo " Starting ZMQ Stereo Depth Camera ROS2 Driver"
-echo " Camera Stream: tcp://10.11.11.1:20000"
-echo " Mode: ROS_LOCALHOST_ONLY=1"
+echo " Starting ZMQ Stereo Depth Camera ROS 2 Driver"
+echo " Stream Target : tcp://10.11.11.1:20000"
+echo " Distro        : ${ROS_DISTRO:-jazzy}"
+echo " Discovery     : ${DISCOVERY_MODE:-Network}"
+echo " PointCloud    : Built-in fast 3D generation (decimated for Nav2)"
 echo "============================================="
 
-# Function to clean up background processes on exit
-cleanup() {
-    echo "Shutting down camera driver..."
-    kill -INT "$PID_CAM" "$PID_PC" 2>/dev/null
-    wait "$PID_CAM" "$PID_PC" 2>/dev/null
-    exit 0
-}
-trap cleanup SIGINT SIGTERM EXIT
-
-# 1. Start ZMQ Camera publisher
-ros2 run zmq_depth_camera ir_pub "$@" &
-PID_CAM=$!
-
-# 2. Start Depth to 3D PointCloud converter
-ros2 run depth_image_proc point_cloud_xyz_node --ros-args \
-  -r image_rect:=/camera/depth/image_raw \
-  -r camera_info:=/camera/depth/camera_info \
-  -r points:=/camera/depth/points &
-PID_PC=$!
-
-echo "Camera Node PID: $PID_CAM"
-echo "Point Cloud Node PID: $PID_PC"
-echo "Streaming active. Press Ctrl+C to stop."
-
-wait "$PID_CAM" "$PID_PC"
+# Check if user requested RViz
+if [[ "$*" == *"--rviz"* ]]; then
+    echo "Launching camera driver with RViz2..."
+    exec ros2 launch zmq_depth_camera camera_with_rviz.launch.py
+else
+    echo "Launching camera driver (press Ctrl+C to stop)..."
+    exec ros2 launch zmq_depth_camera camera.launch.py "$@"
+fi
