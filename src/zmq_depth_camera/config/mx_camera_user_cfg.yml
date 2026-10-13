@@ -1,0 +1,78 @@
+camera:
+  exposure:
+    over_exposure_weight: 10
+    over_exposure_ratio: 0.5
+    max_expo_pattern_time_ms: 30.475
+    min_expo_pattern_time_ms: 0.04876
+    max_expo_environment_time_ms: 2.438
+    min_expo_environment_time_ms: 2.438
+    expected_pattern_int: 60
+    expected_environment_int: 60
+    set_max_gain: 16
+    set_min_gain: 16
+  outdoor_gray_sum_thre: 8000000
+  outdoor_gray_sum_thre_for_expo: 800000
+  fixed_min_expo_in_outdoor_mode: 1500
+  fixed_max_expo_in_outdoor_mode: 2000
+  fixed_max_gain_in_outdoor_mode: 48
+  fixed_min_gain_in_outdoor_mode: 16
+  frequency: 15
+  light:
+    environment: 1
+    flash: 0
+    pattern: 14
+  pattern:
+    physic_current_mA: 330
+    physic_max_time_ms: 27
+    pwm_fre_Hz: 20000
+    max_current_mA: 330
+    min_current_mA: 50
+    max_time_ms: 27
+    min_time_ms: 1
+enhance_camera:
+  camera_mode_type_config:
+    - pattern_on: true
+      pattern:
+        max_time_ms: 40
+        min_time_ms: 1
+        max_current_mA: 300
+        min_current_mA: 250
+      exposure:
+        max_expo_time_ms: 37.99623
+        min_expo_time_ms: 3.99832
+        expected_int: 128
+        over_exposure_weight: 2
+        over_exposure_ratio: 0.5
+        set_max_gain: 48
+        set_min_gain: 16
+    - pattern_on: false
+      pattern:
+        max_time_ms: 27
+        min_time_ms: 1
+        max_current_mA: 300
+        min_current_mA: 250
+      exposure:
+        max_expo_time_ms: 2.45019
+        min_expo_time_ms: 2.45019
+        expected_int: 60
+        over_exposure_weight: 10
+        over_exposure_ratio: 0.5
+        set_max_gain: 16
+        set_min_gain: 16
+    - pattern_on: true
+      pattern:
+        max_time_ms: 40
+        min_time_ms: 1
+        max_current_mA: 300
+        min_current_mA: 250
+      exposure:
+        max_expo_time_ms: 37.99623
+        min_expo_time_ms: 0.09752
+        expected_int: 80
+        over_exposure_weight: 10
+        over_exposure_ratio: 0.5
+        set_max_gain: 48
+        set_min_gain: 16
+  camera_mode_type_list:
+    - mode_type: 0
+    - mode_type: 2

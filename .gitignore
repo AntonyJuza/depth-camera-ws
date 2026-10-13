@@ -1,0 +1,26 @@
+# ROS 2 workspace build artifacts
+build/
+install/
+log/
+.colcon/
+
+# Python cache & packaging
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+
+# Editor & OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Raw frame dumps and logs
+unknown_frame_dumps/
+*.bin
+*.log
