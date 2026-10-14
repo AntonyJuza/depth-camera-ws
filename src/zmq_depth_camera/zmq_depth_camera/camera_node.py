@@ -49,10 +49,14 @@ class ZmqDepthCameraNode(Node):
         self.declare_parameter('camera_roll', 0.0)
         self.declare_parameter('enable_pointcloud', True)
         self.declare_parameter('pointcloud_decimation', 2)  # 2x2 decimation for lightweight Nav2 costmap processing
-        self.declare_parameter('pointcloud_min_depth', 0.15)
+        self.declare_parameter('pointcloud_min_depth', 0.08)
         self.declare_parameter('pointcloud_max_depth', 3.5)
         self.declare_parameter('depth_scale', 0.001)
         self.declare_parameter('max_depth_threshold', 10000)
+        self.declare_parameter('is_disparity_map', True)
+        self.declare_parameter('baseline_m', 0.02514)
+        self.declare_parameter('flip_horizontal', True)
+        self.declare_parameter('flip_vertical', False)
         self.declare_parameter('left_info_file', '')
         self.declare_parameter('right_info_file', '')
         self.declare_parameter('depth_info_file', '')
@@ -79,6 +83,11 @@ class ZmqDepthCameraNode(Node):
         self.pc_max_depth = self.get_parameter('pointcloud_max_depth').get_parameter_value().double_value
         self.depth_scale = self.get_parameter('depth_scale').get_parameter_value().double_value
         self.max_depth_threshold = self.get_parameter('max_depth_threshold').get_parameter_value().integer_value
+        self.is_disparity_map = self.get_parameter('is_disparity_map').get_parameter_value().bool_value
+        self.baseline_m = self.get_parameter('baseline_m').get_parameter_value().double_value
+        self.flip_horizontal = self.get_parameter('flip_horizontal').get_parameter_value().bool_value
+        self.flip_vertical = self.get_parameter('flip_vertical').get_parameter_value().bool_value
+        self.disp_factor = 163.10  # fx_full_res * baseline * 16.0 (matches LiDAR ground truth)
 
         self.bridge = CvBridge()
         self.frame_counter = 0
@@ -125,6 +134,16 @@ class ZmqDepthCameraNode(Node):
         self.timer = self.create_timer(timer_period, self.poll_zmq)
 
         self.get_logger().info("ZMQ Stereo Depth Camera Node initialized successfully.")
+
+    def apply_flip(self, img: np.ndarray) -> np.ndarray:
+        """Flips image horizontally and/or vertically if configured."""
+        if self.flip_horizontal and self.flip_vertical:
+            return cv2.flip(img, -1)
+        elif self.flip_horizontal:
+            return cv2.flip(img, 1)
+        elif self.flip_vertical:
+            return cv2.flip(img, 0)
+        return img
 
     def find_config_file(self, filename: str) -> str:
         """Finds configuration file in package share, workspace, or local path."""
@@ -237,6 +256,9 @@ class ZmqDepthCameraNode(Node):
 
         self.x_coeff = (u_grid - cx) / fx
         self.y_coeff = (v_grid - cy) / fy
+        # Disparity is computed from 640x480 full resolution stereo matching,
+        # so the focal length is fx_full = fx * 2.0 (~405.3 px)
+        self.disp_factor = (fx * 2.0) * self.baseline_m * 16.0
 
     def decode_stereo_calibration(self, blob: bytes):
         """Decode 472-byte stereo calibration blob from stream."""
@@ -283,8 +305,13 @@ class ZmqDepthCameraNode(Node):
         self.caminfo_depth.d = [0.0, 0.0, 0.0, 0.0, 0.0]
         self.caminfo_depth.header.frame_id = self.depth_frame_id
 
+        if len(t) >= 1 and abs(float(t[0])) > 0.005:
+            self.baseline_m = abs(float(t[0]))
+        # Full resolution focal length fx_l matches full-res disparity plane
+        self.disp_factor = fx_l * self.baseline_m * 16.0
+
         self.update_pointcloud_intrinsics()
-        self.get_logger().info("Dynamically updated camera calibration from stream.")
+        self.get_logger().info(f"Dynamically updated camera calibration: fx_full={fx_l:.1f}, baseline={self.baseline_m*100:.2f}cm, disp_factor={self.disp_factor:.2f}")
 
     def publish_static_transforms(self):
         """Broadcasts static TF frames according to ROS REP-103 and REP-105."""
@@ -363,20 +390,30 @@ class ZmqDepthCameraNode(Node):
         self.static_tf_broadcaster.sendTransform(transforms)
 
     def generate_point_cloud(self, depth_arr: np.ndarray, stamp) -> PointCloud2:
-        """Fast vectorized PointCloud2 generation directly from depth image."""
-        min_thresh = int(self.pc_min_depth / self.depth_scale)
-        max_thresh = int(min(self.pc_max_depth / self.depth_scale, self.max_depth_threshold))
-
+        """Fast vectorized PointCloud2 generation directly from disparity/depth image."""
         # Downsample depth map if decimation > 1
         if self.pc_decimation > 1:
-            depth_sampled = depth_arr[::self.pc_decimation, ::self.pc_decimation]
+            sampled = depth_arr[::self.pc_decimation, ::self.pc_decimation]
         else:
-            depth_sampled = depth_arr
+            sampled = depth_arr
 
-        mask = (depth_sampled > min_thresh) & (depth_sampled < max_thresh)
-        z = depth_sampled[mask] * self.depth_scale
-        x = self.x_coeff[mask] * z
-        y = self.y_coeff[mask] * z
+        if self.is_disparity_map:
+            disp = sampled.astype(np.float32)
+            # 4-bit subpixel disparity: valid above noise floor (>15) and below max threshold
+            mask = (disp > 15.0) & (disp < self.max_depth_threshold)
+            z_arr = np.zeros_like(disp)
+            z_arr[mask] = self.disp_factor / disp[mask]
+            valid = mask & (z_arr >= self.pc_min_depth) & (z_arr <= self.pc_max_depth)
+            z = z_arr[valid]
+            x = self.x_coeff[valid] * z
+            y = self.y_coeff[valid] * z
+        else:
+            min_thresh = int(self.pc_min_depth / self.depth_scale)
+            max_thresh = int(min(self.pc_max_depth / self.depth_scale, self.max_depth_threshold))
+            mask = (sampled > min_thresh) & (sampled < max_thresh)
+            z = sampled[mask] * self.depth_scale
+            x = self.x_coeff[mask] * z
+            y = self.y_coeff[mask] * z
 
         num_points = len(z)
         pts = np.empty((num_points, 3), dtype=np.float32)
@@ -443,12 +480,30 @@ class ZmqDepthCameraNode(Node):
             if frame_name == 'stereo_depth_map' and L in (153600, 153656):
                 w, h = 320, 240
                 arr = np.frombuffer(payload[-(w*h*2):], dtype=np.uint16).reshape((h, w)).copy()
+                arr = self.apply_flip(arr)
 
-                # Filter invalid error codes to 0
-                arr[arr >= self.max_depth_threshold] = 0
+                if self.is_disparity_map:
+                    # Filter invalid/error codes (e.g. 65504/65520/-32/-16 or <= 15)
+                    valid_disp = (arr > 15) & (arr < self.max_depth_threshold)
+                    valid_count = np.count_nonzero(valid_disp)
+
+                    # Interleaved IR strobe: when dot projector is OFF, stereo matching produces
+                    # all negative/error codes (valid_count ~0). Skip inactive frames so we don't
+                    # publish empty point clouds that wipe out RViz and Nav2 costmap!
+                    if valid_count < 100:
+                        continue
+
+                    # Convert 4-bit subpixel disparity to metric depth in millimeters (16UC1 standard)
+                    depth_mm = np.zeros_like(arr, dtype=np.uint16)
+                    z_mm = (self.disp_factor * 1000.0) / arr[valid_disp].astype(np.float32)
+                    depth_mm[valid_disp] = np.clip(z_mm, 0, 65535).astype(np.uint16)
+                    img_to_pub = depth_mm
+                else:
+                    arr[arr >= self.max_depth_threshold] = 0
+                    img_to_pub = arr
 
                 # Publish Depth Image
-                img_msg = self.bridge.cv2_to_imgmsg(arr, encoding='16UC1')
+                img_msg = self.bridge.cv2_to_imgmsg(img_to_pub, encoding='16UC1')
                 img_msg.header.stamp = now
                 img_msg.header.frame_id = self.depth_frame_id
                 self.depth_pub.publish(img_msg)
@@ -461,7 +516,8 @@ class ZmqDepthCameraNode(Node):
                 if self.enable_pointcloud and self.pc_pub is not None:
                     try:
                         pc_msg = self.generate_point_cloud(arr, now)
-                        self.pc_pub.publish(pc_msg)
+                        if pc_msg.width > 0:
+                            self.pc_pub.publish(pc_msg)
                     except Exception as e:
                         self.get_logger().warn(f"Point cloud generation error: {e}", throttle_duration_sec=5.0)
 
@@ -469,8 +525,10 @@ class ZmqDepthCameraNode(Node):
             elif frame_name == 'pair_rectify_imgs' and L in (614400, 614448):
                 w, h = 640, 480
                 raw_bytes = payload[-(w*h*2):]
-                left_arr = np.frombuffer(raw_bytes[:w*h], dtype=np.uint8).reshape((h, w))
-                right_arr = np.frombuffer(raw_bytes[w*h:], dtype=np.uint8).reshape((h, w))
+                left_arr = np.frombuffer(raw_bytes[:w*h], dtype=np.uint8).reshape((h, w)).copy()
+                right_arr = np.frombuffer(raw_bytes[w*h:], dtype=np.uint8).reshape((h, w)).copy()
+                left_arr = self.apply_flip(left_arr)
+                right_arr = self.apply_flip(right_arr)
 
                 # Publish Left Rectified Image & Info
                 left_msg = self.bridge.cv2_to_imgmsg(left_arr, encoding='mono8')
@@ -497,7 +555,8 @@ class ZmqDepthCameraNode(Node):
             # 4. Single Rectified IR Image (640x480, mono8)
             elif frame_name == 'rectify_img' and L in (307200, 307224):
                 w, h = 640, 480
-                arr = np.frombuffer(payload[-(w*h):], dtype=np.uint8).reshape((h, w))
+                arr = np.frombuffer(payload[-(w*h):], dtype=np.uint8).reshape((h, w)).copy()
+                arr = self.apply_flip(arr)
                 msg = self.bridge.cv2_to_imgmsg(arr, encoding='mono8')
                 msg.header.stamp = now
                 msg.header.frame_id = self.left_frame_id
@@ -508,7 +567,8 @@ class ZmqDepthCameraNode(Node):
             # 5. Confidence Image (320x240, mono8)
             elif frame_name == 'gray_downscale_image' and L in (76800, 76824):
                 w, h = 320, 240
-                arr = np.frombuffer(payload[-(w*h):], dtype=np.uint8).reshape((h, w))
+                arr = np.frombuffer(payload[-(w*h):], dtype=np.uint8).reshape((h, w)).copy()
+                arr = self.apply_flip(arr)
                 msg = self.bridge.cv2_to_imgmsg(arr, encoding='mono8')
                 msg.header.stamp = now
                 msg.header.frame_id = self.depth_frame_id
@@ -517,7 +577,8 @@ class ZmqDepthCameraNode(Node):
             # 6. Raw Gray Image (640x480, 16UC1)
             elif frame_name == 'gray_image' and L == 614400:
                 w, h = 640, 480
-                arr = np.frombuffer(payload, dtype=np.uint16).reshape((h, w))
+                arr = np.frombuffer(payload, dtype=np.uint16).reshape((h, w)).copy()
+                arr = self.apply_flip(arr)
                 msg = self.bridge.cv2_to_imgmsg(arr, encoding='16UC1')
                 msg.header.stamp = now
                 msg.header.frame_id = self.camera_frame_id
