@@ -11,13 +11,13 @@ zmq_depth_camera_node:
     parent_frame_id: "base_link"
     camera_pos_x: 0.15
     camera_pos_y: 0.0
-    camera_pos_z: 0.06
+    camera_pos_z: 0.002
     camera_yaw: 0.0
-    camera_pitch: 0.1745
+    camera_pitch: 0.0
     camera_roll: 0.0
     enable_pointcloud: true
     pointcloud_decimation: 2
-    pointcloud_min_depth: 0.08
+    pointcloud_min_depth: 0.05
     pointcloud_max_depth: 3.5
     depth_scale: 0.001
     max_depth_threshold: 10000
